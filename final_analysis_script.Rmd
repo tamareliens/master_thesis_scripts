@@ -1,0 +1,366 @@
+---
+title: "thesis analysis"
+author: "Tamar Eliëns"
+date: "2024-05-15"
+output: html_document
+---
+
+```{r}
+#Loading packages and libraries
+#library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(dplyr) 
+library(emmeans)
+library(performance)
+library(DHARMa)
+library(sjPlot)
+library(bestNormalize)
+library(ggplot2)
+
+#load csv file. This file contains the data that's already cleaned and organized
+all_data <- read.csv("/Users/path/to/data")
+head(all_data)
+```
+
+## Inspecting the data
+
+```{r}
+# Create a mapping of participant_id to numbers 1 to 46
+all_data <- all_data %>%
+  mutate(participant_label = as.numeric(factor(participant_id, levels = unique(participant_id))))
+
+# Plot pleasure ratings for each participant
+ggplot(all_data, aes(x = wSI, y= pleasure_rating)) +
+  geom_point() +
+  facet_wrap(~participant_label, nrow=4) +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, col = "purple") +
+  labs(title = "Relationship between pleasure ratings and rhythmic complexity by participant",
+       x = "rhythmic complexity (wSI)", y = "pleasure ratings") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6))
+
+# Plot move ratings for each participant
+ggplot(all_data, aes(x = wSI, y= move_rating)) +
+  geom_point() +
+  facet_wrap(~participant_label, nrow=4) +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, col = "orange") +
+  labs(title = "Relationship between urge to move ratings and rhythmic complexity by participant",
+       x = "rhythmic complexity (wSI)", y = "pleasure ratings") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6))
+
+```
+
+## Models for pleasure ratings
+
+### Create null model and check assumptions
+```{r}
+# original literature predicts main effect of musical expertise.
+m_null <- lmer(pleasure_rating ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+#null because literature has already established this effect. 
+#poly mean centers automatically
+#round not necessary
+
+### Check assumptions
+
+# checks collinearity of each additional variable.
+check_collinearity(m_null) 
+#variables are not collinear
+
+# checks for heteroskedasticity
+check_heteroskedasticity(m_null)
+#is violated
+
+# checks for normality of residuals.
+res1 <- simulateResiduals(m_null)
+plot(res1)
+
+# what distribution best explains data? (extra confirmation of normality of residuals)
+check_distribution(m_null)
+# residuals most likely follow a cauchy distribution
+```
+
+```{r}
+# Identify the best normalization technique
+ratings_transf <- bestNormalize(all_data$pleasure_rating)
+#orderNorm is the best transformation technique
+
+# Apply the identified best normalization technique
+all_data$pleasure_rating_transf <- predict(ratings_transf, newdata = all_data$pleasure_rating)
+
+#Showing distributions of pleasure ratings before and after transformation
+hist(all_data$pleasure_rating)
+hist(all_data$pleasure_rating_transf)
+```
+
+```{r}
+# create new null model with transformed data
+m_null <- lmer(pleasure_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# checks for heteroskedasticity
+check_heteroskedasticity(m_null)
+# not violated anymore
+
+# checks for normality of residuals.
+res2 <- simulateResiduals(m_null)
+plot(res2)
+
+check_distribution(m_null)
+
+#No more violations, yes!
+
+```
+
+### Inattentiveness
+
+```{r}
+# does main effect of intattentiveness add anything?
+m_inattentiveness_main <- lmer(pleasure_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + scale(inattentiveness) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# does interaction with inattentiveness add anything? - best model is model without interaction.
+m_inattentiveness_int <- lmer(pleasure_rating_transf ~ poly(wSI,2) * scale(inattentiveness) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# compare null & full models.
+anova(m_null, m_inattentiveness_main, m_inattentiveness_int)
+# chi-square indicates that null model is optimal.
+```
+
+
+```{r}
+summary(m_null)
+```
+
+```{r}
+# retrieving the confidential intervals
+cis1 <- confint(m_null) 
+print(cis1)
+
+cis2 <- confint(m_null, method = "Wald")
+print(cis2)
+```
+
+
+### Hyperactivity
+
+```{r}
+# null model is the same for hyperactivity as for inattentiveness
+m_null <- lmer(pleasure_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# does main effect of hyperactivity add anything?
+m_hyperactivity_main <- lmer(pleasure_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + scale(hyperactivity) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# does interaction with hyperactivity add anything? - best model is model without interaction.
+m_hyperactivity_int <- lmer(pleasure_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) *  scale(hyperactivity) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# compare null & full models.
+anova(m_null, m_hyperactivity_main, m_hyperactivity_int)
+# report chi-squared table, indicating that null model is optimal, again.
+# So no need to get summary again, because the null model is the same for hyperactivity and inattentiveness
+
+```
+### Creating Table
+```{r}
+# make a table showing the 2 models side-by-side.
+table_pleasure <- tab_model(m_null, show.ci = F)
+print(table_pleasure)
+```
+
+### Plotting the model
+
+```{r}
+#Dividing musical expertise into three levels
+high_mus_exp <- round(mean(all_data$total_mus_expertise) + 2*sd(all_data$total_mus_expertise), digits=2)
+mean_mus_exp <- round(mean(all_data$total_mus_expertise), digits=2)
+low_mus_exp <- round(mean(all_data$total_mus_expertise) - 2*sd(all_data$total_mus_expertise), digits=2)
+
+#create a list for the 'at' argument
+mylist <- list(wSI=seq(4,85,by=85/12), total_mus_expertise=c(low_mus_exp,mean_mus_exp,high_mus_exp))
+
+#names for facet labels
+mus_labs <- c("low musical expertise","medium musical expertise","high musical expertise")
+names(mus_labs) <- c("28.87","68.26","107.65")
+
+# emmip plots.
+plot_m1 <- emmip(m_null,~wSI|total_mus_expertise, at=mylist, col="purple", CIs=TRUE,
+      xlab="rhythmic complexity", ylab="pleasure ratings") +
+  ggplot2::facet_grid(~ total_mus_expertise, labeller = labeller(total_mus_expertise=mus_labs))
+          
+plot_m1 
+
+# create model without transformed data for visualization purposes
+m_visual1 <- lmer(pleasure_rating ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+plot_m_visual1 <- emmip(m_visual1,~wSI|total_mus_expertise, at=mylist, col="purple", CIs=TRUE,
+      xlab="rhythmic complexity", ylab="pleasure ratings") +
+  ggplot2::facet_grid(~ total_mus_expertise, labeller = labeller(total_mus_expertise=mus_labs))
+          
+plot_m_visual1
+# look identical (besides the y-axis values), so I will report the most informative one (with data before transformation)
+```
+
+
+## Models for urge to move ratings
+
+### Create null model and check assumptions
+
+```{r}
+# same null model, but now with urge to move ratings as outcome variable
+m_null2 <- lmer(move_rating ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# checks collinearity of each additional variable.
+check_collinearity(m_null2)
+
+#### check assumptions.
+
+# checks for heteroskedasticity (commonly violated, do not need to adjust)
+check_heteroskedasticity(m_null2)
+
+# checks for normality of residuals.
+res2 <- simulateResiduals(m_null2)
+plot(res2)
+# significant, so significantly different from normal distribution. Need to transpose
+
+check_distribution(m_null2)
+#again cauchy is most likely distribution
+```
+
+```{r}
+# Identify the best normalization technique
+ratings_transf2 <- bestNormalize(all_data$move_rating)
+#again orderNorm
+
+# Apply the identified best normalization technique
+all_data$move_rating_transf <- predict(ratings_transf2, newdata = all_data$move_rating)
+
+#Visualize distributions of urge to move ratings before and after transformation
+hist(all_data$move_rating)
+hist(all_data$move_rating_transf)
+```
+
+```{r}
+#create null model with transformed data
+m_null2 <- lmer(move_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+#checking for model assumptions
+# checks for heteroskedasticity
+check_heteroskedasticity(m_null2)
+#not violated anymore
+
+# checks for normality of residuals.
+res2 <- simulateResiduals(m_null2)
+plot(res2)
+# not significant anymore
+
+check_distribution(m_null2)
+#No more violations
+```
+
+### Inattentiveness
+
+```{r}
+# does main effect of inattentiveness add anything?
+m_inattentiveness_main2 <- lmer(move_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + scale(inattentiveness) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# does interaction with inattentiveness add anything? - best model is model without interaction.
+m_inattentiveness_int2 <- lmer(move_rating_transf ~ poly(wSI,2) * scale(inattentiveness) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# compare null & full models.
+anova(m_null2, m_inattentiveness_main2, m_inattentiveness_int2)
+# report chi-squared table, indicating that null model is again optimal.
+
+```
+
+```{r}
+summary(m_null2)
+```
+
+```{r}
+confint(m_null2)
+```
+
+### Hyperactivity
+```{r}
+# same null model as for inattentiveness
+m_null2 <- lmer(move_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# does main effect of hyperactivity add anything?
+m_hyperactivity_main2 <- lmer(move_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) + scale(hyperactivity) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# does interaction with hyperactivity add anything? - best model is model without interaction.
+m_hyperactivity_int2 <- lmer(move_rating_transf ~ poly(wSI,2) * scale(total_mus_expertise) *  scale(hyperactivity) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+# compare null & full models.
+anova(m_null2, m_hyperactivity_main2, m_hyperactivity_int2)
+# report chi-squared table, indicating that null model is again optimal.
+
+```
+
+### Creating Table
+```{r}
+# make a table showing the 2 models side-by-side.
+table_move <- tab_model(m_null2, show.ci = F)
+print(table_move)
+```
+
+### Plotting the model
+
+```{r}
+# emmip plots.
+plot_m2 <- emmip(m_null2,~wSI|total_mus_expertise, at=mylist, col="orange", CIs=TRUE,
+      xlab="rhythmic complexity", ylab="urge to move ratings") +
+  ggplot2::facet_grid(~ total_mus_expertise, labeller = labeller(total_mus_expertise=mus_labs))
+          
+plot_m2 
+
+# create model without transformed data for visualization purposes
+m_visual2 <- lmer(move_rating ~ poly(wSI,2) * scale(total_mus_expertise) + (scale(wSI)|participant_id) + (1|item), data = all_data, REML = F)
+
+plot_m_visual2 <- emmip(m_visual2,~wSI|total_mus_expertise, at=mylist, col="orange", CIs=TRUE,
+      xlab="rhythmic complexity", ylab="urge to move ratings") +
+  ggplot2::facet_grid(~ total_mus_expertise, labeller = labeller(total_mus_expertise=mus_labs))
+          
+plot_m_visual2
+
+# Plots look identical (besides y-axis values), so I will report the most informative one (with data before transformation)
+
+```
+
+```{r}
+#creating histograms
+
+# Aggregate data to get one inattentiveness and one hyperactivity score per participant_id
+# For example, you can take the mean score. Here we take the mean:
+aggregated_data <- all_data %>%
+  group_by(participant_id) %>%
+  summarise(
+    inattentiveness = mean(inattentiveness, na.rm = TRUE),
+    hyperactivity = mean(hyperactivity, na.rm = TRUE),
+    total_mus_expertise = mean(total_mus_expertise, na.rm = TRUE)
+  )
+
+# Plot histogram of the aggregated inattentiveness scores
+hist(aggregated_data$inattentiveness, 
+     main = "Histogram of Inattentiveness Scores",
+     xlab = "Inattentiveness Score",
+     ylab = "Frequency",
+     col = "lightblue", 
+     border = "black")
+
+# Plot histogram of the aggregated hyperactivity scores
+hist(aggregated_data$hyperactivity, 
+     main = "Histogram of Hyperactivity Scores",
+     xlab = "Hyperactivity Score",
+     ylab = "Frequency",
+     col = "lightblue", 
+     border = "black")
+
+# Plot histogram of the aggregated musical expertise scores
+hist(aggregated_data$inattentiveness, 
+     main = "Histogram of Musical Expertise Scores",
+     xlab = "Musical Expertise Score",
+     ylab = "Frequency",
+     col = "lightblue", 
+     border = "black")
+
+
+```
+
